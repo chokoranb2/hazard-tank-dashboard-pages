@@ -1,0 +1,884 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ハザード排水タンク レベル監視ダッシュボード</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="./config.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: rgba(15, 23, 42, 0.86);
+      --panel-2: rgba(30, 41, 59, 0.92);
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --line: rgba(148, 163, 184, 0.28);
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --info: #38bdf8;
+      --shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+      --radius: 22px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 20% 20%, rgba(56, 189, 248, 0.18), transparent 32%),
+        radial-gradient(circle at 80% 10%, rgba(34, 197, 94, 0.14), transparent 28%),
+        linear-gradient(135deg, #020617 0%, #0f172a 45%, #111827 100%);
+    }
+
+    .page {
+      width: min(1280px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 36px;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: flex-start;
+      margin-bottom: 22px;
+    }
+
+    .title-block h1 {
+      margin: 0 0 8px;
+      font-size: clamp(24px, 3vw, 38px);
+      letter-spacing: 0.02em;
+    }
+
+    .title-block p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 10px;
+      min-width: 260px;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      background: rgba(15, 23, 42, 0.72);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--muted);
+      box-shadow: 0 0 14px currentColor;
+    }
+
+    .dot.ok { background: var(--ok); color: var(--ok); }
+    .dot.warn { background: var(--warn); color: var(--warn); }
+    .dot.danger { background: var(--danger); color: var(--danger); }
+
+    button {
+      border: 0;
+      color: #03111f;
+      background: linear-gradient(135deg, #7dd3fc, #22c55e);
+      padding: 10px 16px;
+      border-radius: 999px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 12px 26px rgba(34, 197, 94, 0.18);
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.62;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .card, .chart-card, .notice-card {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+    }
+
+    .tank-card {
+      padding: 22px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .tank-card::after {
+      content: "";
+      position: absolute;
+      inset: auto -40px -80px auto;
+      width: 220px;
+      height: 220px;
+      border-radius: 50%;
+      background: rgba(56, 189, 248, 0.10);
+      pointer-events: none;
+    }
+
+    .tank-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+      margin-bottom: 18px;
+    }
+
+    .tank-name {
+      font-size: 18px;
+      font-weight: 800;
+      margin-bottom: 4px;
+    }
+
+    .tank-id {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.03em;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+
+    .badge.ok {
+      color: #bbf7d0;
+      background: rgba(34, 197, 94, 0.14);
+      border-color: rgba(34, 197, 94, 0.34);
+    }
+
+    .badge.warn {
+      color: #fde68a;
+      background: rgba(245, 158, 11, 0.14);
+      border-color: rgba(245, 158, 11, 0.38);
+    }
+
+    .badge.danger {
+      color: #fecaca;
+      background: rgba(239, 68, 68, 0.14);
+      border-color: rgba(239, 68, 68, 0.38);
+    }
+
+    .badge.neutral {
+      color: #cbd5e1;
+      background: rgba(148, 163, 184, 0.12);
+      border-color: rgba(148, 163, 184, 0.30);
+    }
+
+    .signal-note {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .signal-note strong {
+      color: #cbd5e1;
+    }
+
+    .main-value {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .main-value .num {
+      font-size: clamp(42px, 6vw, 72px);
+      line-height: 1;
+      font-weight: 900;
+      letter-spacing: -0.06em;
+    }
+
+    .main-value .unit {
+      color: var(--muted);
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .bar-wrap {
+      height: 12px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.20);
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+
+    .bar {
+      height: 100%;
+      width: 0%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #38bdf8, #22c55e, #f59e0b);
+      transition: width 0.4s ease;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .metric {
+      background: rgba(30, 41, 59, 0.82);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 16px;
+      padding: 10px;
+    }
+
+    .metric-label {
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 5px;
+    }
+
+    .metric-value {
+      font-size: 14px;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+
+    .chart-card {
+      padding: 22px;
+      margin-bottom: 18px;
+    }
+
+    .chart-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+
+    .section-title {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 850;
+    }
+
+    .range-tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .range-btn {
+      border: 1px solid rgba(148, 163, 184, 0.30);
+      background: rgba(30, 41, 59, 0.72);
+      color: #e5e7eb;
+      padding: 8px 11px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      box-shadow: none;
+    }
+
+    .range-btn.active {
+      color: #03111f;
+      background: linear-gradient(135deg, #7dd3fc, #22c55e);
+      border-color: transparent;
+    }
+
+    .range-note {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: -4px;
+      margin-bottom: 14px;
+      line-height: 1.6;
+    }
+
+    .chart-wrap {
+      height: 390px;
+    }
+
+    .notice-card {
+      padding: 18px 20px;
+      color: var(--muted);
+      line-height: 1.7;
+      font-size: 13px;
+    }
+
+    .notice-card strong {
+      color: var(--text);
+    }
+
+    .error {
+      display: none;
+      margin: 0 0 18px;
+      padding: 14px 16px;
+      border: 1px solid rgba(239, 68, 68, 0.38);
+      background: rgba(239, 68, 68, 0.12);
+      color: #fecaca;
+      border-radius: 16px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+    }
+
+    @media (max-width: 900px) {
+      .header {
+        flex-direction: column;
+      }
+
+      .toolbar {
+        align-items: flex-start;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .metrics {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .chart-wrap {
+        height: 320px;
+      }
+
+      .range-tabs {
+        justify-content: flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="header">
+      <div class="title-block">
+        <h1>ハザード排水タンク レベル監視</h1>
+        <p>
+          Raspberry Pi × ADS1256 × Supabase によるIoT監視ダッシュボード<br>
+          監視対象：ハザード排水タンク No.1 / No.2 水位信号
+        </p>
+      </div>
+      <div class="toolbar">
+        <div class="status-pill">
+          <span id="healthDot" class="dot"></span>
+          <span id="healthText">読み込み待機中</span>
+        </div>
+        <div class="status-pill">
+          最終更新：<span id="lastUpdated">-</span>
+        </div>
+        <button id="refreshBtn" type="button">手動更新</button>
+      </div>
+    </header>
+
+    <div id="errorBox" class="error"></div>
+
+    <section class="grid">
+      <article id="card-TANK_NO1" class="card tank-card"></article>
+      <article id="card-TANK_NO2" class="card tank-card"></article>
+    </section>
+
+    <section class="chart-card">
+      <div class="chart-head">
+        <h2 class="section-title">水量トレンド</h2>
+        <div id="rangeTabs" class="range-tabs" aria-label="表示期間切替"></div>
+      </div>
+      <div id="rangeNote" class="range-note">表示期間を選択してください。</div>
+      <div class="chart-wrap">
+        <canvas id="trendChart"></canvas>
+      </div>
+    </section>
+
+    <section class="notice-card">
+      <strong>運用上の注意：</strong>
+      本画面はIoT監視・可視化・ロギングを目的とした参考表示です。
+      既設PLC、中央監視設備、満水警報、ローリー回収水位警報、インターロックを代替するものではありません。
+    </section>
+  </main>
+
+  <script>
+    const cfg = window.DASHBOARD_CONFIG || {};
+    const TANK_ORDER = ["TANK_NO1", "TANK_NO2"];
+    const TANK_LABELS = {
+      TANK_NO1: "ハザード排水タンク No.1",
+      TANK_NO2: "ハザード排水タンク No.2"
+    };
+
+    const RANGE_OPTIONS = [
+      { key: "latest300", label: "最新300件", limit: 300, aggregateMinutes: 0, note: "最新300件を表示します。短時間の動作確認向けです。" },
+      { key: "6h", label: "直近6時間", hours: 6, limit: 1000, aggregateMinutes: 0, note: "直近6時間の変動を表示します。" },
+      { key: "24h", label: "直近24時間", hours: 24, limit: 2000, aggregateMinutes: 0, note: "直近24時間の推移を表示します。" },
+      { key: "7d", label: "直近7日", days: 7, limit: 5000, aggregateMinutes: 0, note: "直近7日間の推移を表示します。" },
+      { key: "30d", label: "直近1か月", days: 30, limit: 20000, aggregateMinutes: 60, note: "直近1か月の推移を1時間平均に集約して表示します。" },
+      { key: "90d", label: "直近3か月", days: 90, limit: 60000, aggregateMinutes: 360, note: "直近3か月の推移を6時間平均に集約して表示します。" }
+    ];
+
+    let selectedRangeKey = "24h";
+    let chart;
+
+    function fmtNum(value, digits = 2) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return "-";
+      return n.toFixed(digits);
+    }
+
+    function fmtTime(value) {
+      if (!value) return "-";
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) return value;
+      return d.toLocaleString("ja-JP", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      });
+    }
+
+    function fmtTimeShort(value) {
+      if (!value) return "-";
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) return value;
+      return d.toLocaleString("ja-JP", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit"
+      });
+    }
+
+    function aggregateRows(rows, aggregateMinutes) {
+      if (!aggregateMinutes || aggregateMinutes <= 0) return rows;
+
+      const bucketMs = aggregateMinutes * 60 * 1000;
+      const buckets = new Map();
+
+      for (const row of rows) {
+        const t = new Date(row.ts).getTime();
+        if (!Number.isFinite(t)) continue;
+
+        const bucketStart = Math.floor(t / bucketMs) * bucketMs;
+        const key = `${row.tank_id}|${bucketStart}`;
+
+        if (!buckets.has(key)) {
+          buckets.set(key, {
+            ...row,
+            ts: new Date(bucketStart).toISOString(),
+            raw_sum: 0,
+            current_mA_sum: 0,
+            level_percent_sum: 0,
+            volume_m3_sum: 0,
+            count: 0,
+            quality_ng_count: 0,
+            alarm_values: new Set()
+          });
+        }
+
+        const b = buckets.get(key);
+        b.raw_sum += Number(row.raw) || 0;
+        b.current_mA_sum += Number(row.current_mA) || 0;
+        b.level_percent_sum += Number(row.level_percent) || 0;
+        b.volume_m3_sum += Number(row.volume_m3) || 0;
+        b.count += 1;
+
+        if (row.quality && row.quality !== "OK") b.quality_ng_count += 1;
+        if (row.tank_alarm) b.alarm_values.add(row.tank_alarm);
+      }
+
+      return Array.from(buckets.values())
+        .map(b => {
+          const count = Math.max(1, b.count);
+          const alarmValues = Array.from(b.alarm_values);
+
+          return {
+            ...b,
+            raw: b.raw_sum / count,
+            current_mA: b.current_mA_sum / count,
+            level_percent: b.level_percent_sum / count,
+            volume_m3: b.volume_m3_sum / count,
+            quality: b.quality_ng_count > 0 ? "CHECK_AGGREGATED" : "OK",
+            tank_alarm: alarmValues.includes("DRAIN_NOTICE") ? "DRAIN_NOTICE" :
+                        alarmValues.includes("NORMAL") ? "NORMAL" :
+                        alarmValues[0] || "UNKNOWN",
+            aggregate_count: count
+          };
+        })
+        .sort((a, b) => new Date(a.ts) - new Date(b.ts));
+    }
+
+    function tankStateClass(record) {
+      if (!record) return "neutral";
+
+      const alarm = record.tank_alarm || "UNKNOWN";
+      const quality = record.quality || "UNKNOWN";
+
+      // IoT信号品質がNGでも、タンク状態そのものとは分けて表示する。
+      // 信号が取れていない場合は、タンク状態を「確認不可」として落ち着いた色にする。
+      if (quality !== "OK") return "neutral";
+
+      if (alarm === "NORMAL") return "ok";
+      if (alarm === "DRAIN_NOTICE") return "warn";
+      if (alarm === "UNKNOWN") return "neutral";
+
+      return "danger";
+    }
+
+    function tankStateText(record) {
+      if (!record) return "データなし";
+
+      const quality = record.quality || "UNKNOWN";
+      const alarm = record.tank_alarm || "UNKNOWN";
+
+      if (quality !== "OK") return "タンク状態 確認不可";
+      if (alarm === "NORMAL") return "NORMAL";
+      if (alarm === "DRAIN_NOTICE") return "回収目安";
+      if (alarm === "UNKNOWN") return "状態未判定";
+
+      return alarm;
+    }
+
+    function signalQualityText(record) {
+      if (!record) return "NO DATA";
+      return record.quality || "UNKNOWN";
+    }
+
+    function isSignalQualityIssue(record) {
+      if (!record) return true;
+      return record.quality && record.quality !== "OK";
+    }
+
+    function setHealth(state, text) {
+      const dot = document.getElementById("healthDot");
+      const label = document.getElementById("healthText");
+      dot.className = `dot ${state}`;
+      label.textContent = text;
+    }
+
+    function showError(message) {
+      const box = document.getElementById("errorBox");
+      box.style.display = "block";
+      box.textContent = message;
+    }
+
+    function clearError() {
+      const box = document.getElementById("errorBox");
+      box.style.display = "none";
+      box.textContent = "";
+    }
+
+    function getSelectedRange() {
+      return RANGE_OPTIONS.find(r => r.key === selectedRangeKey) || RANGE_OPTIONS[0];
+    }
+
+    function rangeStartIso(range) {
+      if (!range.hours && !range.days) return null;
+      const d = new Date();
+      if (range.hours) d.setHours(d.getHours() - range.hours);
+      if (range.days) d.setDate(d.getDate() - range.days);
+      return d.toISOString();
+    }
+
+    function supabaseUrl() {
+      const base = (cfg.SUPABASE_URL || "").replace(/\/$/, "");
+      const table = cfg.TABLE_NAME;
+      if (!base || !cfg.SUPABASE_ANON_KEY || !table) {
+        throw new Error("config.js の SUPABASE_URL / SUPABASE_ANON_KEY / TABLE_NAME を確認してください。");
+      }
+
+      const range = getSelectedRange();
+      const params = new URLSearchParams();
+      params.set("select", "*");
+
+      const since = rangeStartIso(range);
+      if (since) {
+        params.set("ts", `gte.${since}`);
+        params.set("order", "ts.asc");
+      } else {
+        params.set("order", "ts.desc");
+      }
+
+      params.set("limit", String(range.limit || 300));
+
+      return `${base}/rest/v1/${table}?${params.toString()}`;
+    }
+
+    async function fetchRows() {
+      const res = await fetch(supabaseUrl(), {
+        headers: {
+          apikey: cfg.SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${cfg.SUPABASE_ANON_KEY}`
+        }
+      });
+
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`Supabase取得エラー: HTTP ${res.status}\n${body}`);
+      }
+
+      return await res.json();
+    }
+
+    function latestByTank(rows) {
+      const latest = {};
+      for (const row of rows) {
+        if (!latest[row.tank_id]) latest[row.tank_id] = row;
+      }
+      return latest;
+    }
+
+    function renderTankCard(tankId, record) {
+      const el = document.getElementById(`card-${tankId}`);
+      const label = record?.display_name || TANK_LABELS[tankId] || tankId;
+      const percent = Math.max(0, Math.min(100, Number(record?.level_percent || 0)));
+      const klass = tankStateClass(record);
+
+      el.innerHTML = `
+        <div class="tank-top">
+          <div>
+            <div class="tank-name">${label}</div>
+            <div class="tank-id">${tankId} / ${record?.adc_input || "-"}</div>
+          </div>
+          <span class="badge ${klass}">${tankStateText(record)}</span>
+        </div>
+
+        <div class="main-value">
+          <span class="num">${fmtNum(record?.volume_m3, 2)}</span>
+          <span class="unit">m³</span>
+        </div>
+
+        <div class="bar-wrap">
+          <div class="bar" style="width: ${percent}%"></div>
+        </div>
+
+        <div class="metrics">
+          <div class="metric">
+            <div class="metric-label">水位</div>
+            <div class="metric-value">${fmtNum(record?.level_percent, 1)} %</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">電流</div>
+            <div class="metric-value">${fmtNum(record?.current_mA, 3)} mA</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">raw</div>
+            <div class="metric-value">${fmtNum(record?.raw, 1)}</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">データ時刻</div>
+            <div class="metric-value">${fmtTime(record?.ts)}</div>
+          </div>
+        </div>
+
+        <div class="signal-note">
+          IoT信号品質：<strong>${signalQualityText(record)}</strong>
+          ${isSignalQualityIssue(record) ? " / センサー値・配線・未接続状態を確認してください。タンク状態そのものの警報ではありません。" : ""}
+        </div>
+      `;
+    }
+
+    function renderChart(rows) {
+      const range = getSelectedRange();
+      const displayRows = aggregateRows(rows, range.aggregateMinutes || 0);
+      const sorted = [...displayRows].sort((a, b) => new Date(a.ts) - new Date(b.ts));
+      const labels = [...new Set(sorted.map(r => fmtTimeShort(r.ts)))];
+
+      const datasets = TANK_ORDER.map(tankId => {
+        const map = new Map(
+          sorted
+            .filter(r => r.tank_id === tankId)
+            .map(r => [fmtTimeShort(r.ts), Number(r.volume_m3)])
+        );
+
+        return {
+          label: TANK_LABELS[tankId],
+          data: labels.map(label => map.has(label) ? map.get(label) : null),
+          tension: 0.22,
+          spanGaps: true,
+          pointRadius: labels.length > 500 ? 0 : 2,
+          borderWidth: labels.length > 500 ? 2 : 3
+        };
+      });
+
+      const ctx = document.getElementById("trendChart");
+
+      if (chart) chart.destroy();
+
+      chart = new Chart(ctx, {
+        type: "line",
+        data: { labels, datasets },
+        options: {
+          maintainAspectRatio: false,
+          responsive: true,
+          interaction: {
+            mode: "index",
+            intersect: false
+          },
+          plugins: {
+            legend: {
+              labels: {
+                color: "#e5e7eb",
+                usePointStyle: true
+              }
+            },
+            tooltip: {
+              callbacks: {
+                label: ctx => `${ctx.dataset.label}: ${fmtNum(ctx.raw, 2)} m³`
+              }
+            }
+          },
+          scales: {
+            x: {
+              ticks: {
+                color: "#94a3b8",
+                maxRotation: 0,
+                autoSkip: true,
+                maxTicksLimit: 8
+              },
+              grid: { color: "rgba(148, 163, 184, 0.16)" }
+            },
+            y: {
+              title: {
+                display: true,
+                text: "水量 m³",
+                color: "#94a3b8"
+              },
+              ticks: { color: "#94a3b8" },
+              grid: { color: "rgba(148, 163, 184, 0.16)" }
+            }
+          }
+        }
+      });
+    }
+
+    function isStale(latestRows) {
+      const staleMinutes = Number(cfg.STALE_MINUTES || 15);
+      const latestTs = latestRows
+        .map(r => r?.ts)
+        .filter(Boolean)
+        .map(ts => new Date(ts).getTime())
+        .filter(t => Number.isFinite(t))
+        .sort((a, b) => b - a)[0];
+
+      if (!latestTs) return true;
+      return Date.now() - latestTs > staleMinutes * 60 * 1000;
+    }
+
+    async function refresh() {
+      const btn = document.getElementById("refreshBtn");
+      btn.disabled = true;
+      clearError();
+
+      try {
+        setHealth("", "データ取得中");
+        const rows = await fetchRows();
+
+        if (!Array.isArray(rows) || rows.length === 0) {
+          throw new Error("Supabaseからデータを取得できましたが、対象レコードが0件です。");
+        }
+
+        const range = getSelectedRange();
+        const aggregateMinutes = range.aggregateMinutes || 0;
+        const aggregatedRows = aggregateRows(rows, aggregateMinutes);
+        const aggregateText = aggregateMinutes > 0
+          ? ` / 表示点数 ${aggregatedRows.length}点（${aggregateMinutes}分平均）`
+          : "";
+
+        document.getElementById("rangeNote").textContent =
+          `${range.label}：${range.note} / 取得件数 ${rows.length}件${aggregateText}`;
+
+        const rowsForLatest = [...rows].sort((a, b) => new Date(b.ts) - new Date(a.ts));
+        const latest = latestByTank(rowsForLatest);
+        for (const tankId of TANK_ORDER) {
+          renderTankCard(tankId, latest[tankId]);
+        }
+
+        renderChart(rows);
+
+        const latestRows = TANK_ORDER.map(id => latest[id]).filter(Boolean);
+        const hasSignalIssue = latestRows.some(r => isSignalQualityIssue(r));
+        const hasTankWarning = latestRows.some(r => r.quality === "OK" && r.tank_alarm && r.tank_alarm !== "NORMAL");
+        const hasTankDanger = latestRows.some(r =>
+          r.quality === "OK" &&
+          r.tank_alarm &&
+          !["NORMAL", "DRAIN_NOTICE", "UNKNOWN"].includes(r.tank_alarm)
+        );
+
+        if (isStale(latestRows)) {
+          setHealth("warn", "STALE：最新データが古い可能性");
+        } else if (hasTankDanger) {
+          setHealth("danger", "タンク状態警戒あり");
+        } else if (hasTankWarning) {
+          setHealth("warn", "タンク回収目安あり");
+        } else if (hasSignalIssue) {
+          setHealth("warn", "IoT信号確認あり");
+        } else {
+          setHealth("ok", "正常取得中");
+        }
+
+        document.getElementById("lastUpdated").textContent = fmtTime(new Date().toISOString());
+      } catch (err) {
+        console.error(err);
+        setHealth("danger", "取得エラー");
+        showError(err.message || String(err));
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function renderRangeTabs() {
+      const wrap = document.getElementById("rangeTabs");
+      wrap.innerHTML = "";
+
+      for (const range of RANGE_OPTIONS) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = `range-btn ${range.key === selectedRangeKey ? "active" : ""}`;
+        btn.textContent = range.label;
+        btn.addEventListener("click", () => {
+          selectedRangeKey = range.key;
+          renderRangeTabs();
+          refresh();
+        });
+        wrap.appendChild(btn);
+      }
+    }
+
+    document.getElementById("refreshBtn").addEventListener("click", refresh);
+
+    renderRangeTabs();
+    refresh();
+    setInterval(refresh, Number(cfg.REFRESH_INTERVAL_MS || 300000));
+  </script>
+</body>
+</html>
