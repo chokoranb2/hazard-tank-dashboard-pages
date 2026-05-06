@@ -663,6 +663,15 @@
       const percent = Math.max(0, Math.min(100, Number(record?.level_percent || 0)));
       const klass = tankStateClass(record);
 
+      // メイン水量表示は、IoT信号品質がOKのときだけ数値表示する。
+      // LOW_SIGNAL等の場合、内部的には負値も異常判定に使用するが、
+      // 利用者向け表示では誤解防止のため "--" とする。
+      // 表示桁は既設HA44デジタルスケーリングメーターに合わせて小数点1桁とする。
+      const mainVolumeText =
+        record && record.quality === "OK"
+          ? fmtNum(record.volume_m3, 1)
+          : "--";
+
       el.innerHTML = `
         <div class="tank-top">
           <div>
@@ -673,7 +682,7 @@
         </div>
 
         <div class="main-value">
-          <span class="num">${fmtNum(record?.volume_m3, 2)}</span>
+          <span class="num">${mainVolumeText}</span>
           <span class="unit">m³</span>
         </div>
 
