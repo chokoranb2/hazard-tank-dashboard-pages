@@ -380,6 +380,52 @@
         justify-content: flex-start;
       }
     }
+
+    .chart-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    .axis-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.72);
+      color: #94a3b8;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .axis-toggle button {
+      border: 0;
+      border-radius: 999px;
+      padding: 6px 10px;
+      color: #cbd5e1;
+      background: transparent;
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .axis-toggle button.active {
+      color: #06111f;
+      background: linear-gradient(135deg, #7dd3fc, #22c55e);
+    }
+
+
+    .dashboard-version {
+      margin-top: 10px;
+      text-align: right;
+      color: rgba(148, 163, 184, 0.72);
+      font-size: 11px;
+      letter-spacing: 0.02em;
+    }
+
   </style>
 </head>
 <body>
@@ -414,7 +460,14 @@
     <section class="chart-card">
       <div class="chart-head">
         <h2 class="section-title">水量トレンド</h2>
-        <div id="rangeTabs" class="range-tabs" aria-label="表示期間切替"></div>
+        <div class="chart-controls">
+          <div id="rangeTabs" class="range-tabs" aria-label="表示期間切替"></div>
+          <div class="axis-toggle" aria-label="縦軸スケール切替">
+            <span>縦軸</span>
+            <button id="axisAutoBtn" type="button" class="active">自動</button>
+            <button id="axisFullBtn" type="button">0〜18.8m³</button>
+          </div>
+        </div>
       </div>
       <div id="rangeNote" class="range-note">表示期間を選択してください。</div>
       <div class="chart-wrap">
@@ -426,6 +479,9 @@
       <strong>運用上の注意：</strong>
       本画面はIoT監視・可視化・ロギングを目的とした参考表示です。
       既設PLC、中央監視設備、満水警報、ローリー回収水位警報、インターロックを代替するものではありません。
+      また、Raspberry Pi側の換算値は、ADS1256取得値、校正値、平均化処理、更新タイミング等に基づく参考値であり、
+      既設のHA44デジタルスケーリングメーター表示と完全に一致しない場合があります。
+      <div class="dashboard-version">Dashboard v0.16.1 / 2026-05-16</div>
     </section>
   </main>
 
@@ -441,13 +497,18 @@
       { key: "latest300", label: "最新300件", limit: 300, aggregateMinutes: 0, note: "最新300件を表示します。短時間の動作確認向けです。" },
       { key: "6h", label: "直近6時間", hours: 6, limit: 1000, aggregateMinutes: 0, note: "直近6時間の変動を表示します。" },
       { key: "24h", label: "直近24時間", hours: 24, limit: 2000, aggregateMinutes: 0, note: "直近24時間の推移を表示します。" },
-      { key: "7d", label: "直近7日", days: 7, limit: 5000, aggregateMinutes: 0, note: "直近7日間の推移を表示します。" },
+      { key: "7d", label: "直近7日", days: 7, limit: 5000, aggregateMinutes: 60, note: "直近7日間の推移を1時間平均に集約して表示します。" },
       { key: "30d", label: "直近1か月", days: 30, limit: 20000, aggregateMinutes: 60, note: "直近1か月の推移を1時間平均に集約して表示します。" },
-      { key: "90d", label: "直近3か月", days: 90, limit: 60000, aggregateMinutes: 360, note: "直近3か月の推移を6時間平均に集約して表示します。" }
+      { key: "90d", label: "直近3か月", days: 90, limit: 60000, aggregateMinutes: 360, note: "直近3か月の推移を6時間平均に集約して表示します。" },
+      { key: "180d", label: "直近6か月", days: 180, limit: 120000, aggregateMinutes: 720, note: "直近6か月の推移を12時間平均に集約して表示します。" }
     ];
 
     let selectedRangeKey = "24h";
+    let yAxisMode = "auto"; // auto: データに合わせる / full: 0〜満量スケール
     let chart;
+
+    const TANK_VOLUME_MAX_M3 = 18.8;
+    const REPLACE_GUIDE_M3 = 10.0;
 
     function fmtNum(value, digits = 2) {
       const n = Number(value);
@@ -719,6 +780,55 @@
       `;
     }
 
+    const replaceGuideLinePlugin = {
+      id: "replaceGuideLine",
+      afterDatasetsDraw(chart) {
+        const { ctx, chartArea, scales } = chart;
+        const yScale = scales?.y;
+        if (!chartArea || !yScale) return;
+
+        const y = yScale.getPixelForValue(REPLACE_GUIDE_M3);
+        if (!Number.isFinite(y) || y < chartArea.top || y > chartArea.bottom) return;
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.setLineDash([6, 5]);
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = "rgba(248, 113, 113, 0.95)";
+        ctx.moveTo(chartArea.left, y);
+        ctx.lineTo(chartArea.right, y);
+        ctx.stroke();
+
+        const label = `交換目安 ${REPLACE_GUIDE_M3.toFixed(1)} m³`;
+        ctx.setLineDash([]);
+        ctx.font = "700 12px system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+        const textWidth = ctx.measureText(label).width;
+        const padX = 8;
+        const boxH = 22;
+        const boxW = textWidth + padX * 2;
+        const boxX = Math.max(chartArea.left + 8, chartArea.right - boxW - 8);
+        const boxY = Math.max(chartArea.top + 6, y - boxH - 6);
+
+        ctx.fillStyle = "rgba(15, 23, 42, 0.88)";
+        ctx.strokeStyle = "rgba(248, 113, 113, 0.65)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+
+        if (typeof ctx.roundRect === "function") {
+          ctx.roundRect(boxX, boxY, boxW, boxH, 8);
+        } else {
+          ctx.rect(boxX, boxY, boxW, boxH);
+        }
+
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = "#fecaca";
+        ctx.fillText(label, boxX + padX, boxY + 15);
+        ctx.restore();
+      }
+    };
+
     function renderChart(rows) {
       const range = getSelectedRange();
       const displayRows = aggregateRows(rows, range.aggregateMinutes || 0);
@@ -749,6 +859,7 @@
       chart = new Chart(ctx, {
         type: "line",
         data: { labels, datasets },
+        plugins: [replaceGuideLinePlugin],
         options: {
           maintainAspectRatio: false,
           responsive: true,
@@ -780,6 +891,9 @@
               grid: { color: "rgba(148, 163, 184, 0.16)" }
             },
             y: {
+              min: yAxisMode === "full" ? 0 : undefined,
+              max: yAxisMode === "full" ? TANK_VOLUME_MAX_M3 : undefined,
+              suggestedMax: yAxisMode === "auto" ? REPLACE_GUIDE_M3 : undefined,
               title: {
                 display: true,
                 text: "水量 m³",
@@ -886,9 +1000,41 @@
       }
     }
 
+    function updateAxisToggleButtons() {
+      const autoBtn = document.getElementById("axisAutoBtn");
+      const fullBtn = document.getElementById("axisFullBtn");
+
+      if (!autoBtn || !fullBtn) return;
+
+      autoBtn.classList.toggle("active", yAxisMode === "auto");
+      fullBtn.classList.toggle("active", yAxisMode === "full");
+    }
+
+    function setupAxisToggle() {
+      const autoBtn = document.getElementById("axisAutoBtn");
+      const fullBtn = document.getElementById("axisFullBtn");
+
+      if (!autoBtn || !fullBtn) return;
+
+      autoBtn.addEventListener("click", () => {
+        yAxisMode = "auto";
+        updateAxisToggleButtons();
+        refresh();
+      });
+
+      fullBtn.addEventListener("click", () => {
+        yAxisMode = "full";
+        updateAxisToggleButtons();
+        refresh();
+      });
+
+      updateAxisToggleButtons();
+    }
+
     document.getElementById("refreshBtn").addEventListener("click", refresh);
 
     renderRangeTabs();
+    setupAxisToggle();
     refresh();
     setInterval(refresh, Number(cfg.REFRESH_INTERVAL_MS || 300000));
   </script>
