@@ -673,7 +673,7 @@
       return d.toISOString();
     }
 
-    function supabaseUrl() {
+    function supabaseUrl(limit, offset) {
       const base = (cfg.SUPABASE_URL || "").replace(/\/$/, "");
       const table = cfg.TABLE_NAME;
       if (!base || !cfg.SUPABASE_ANON_KEY || !table) {
@@ -687,37 +687,65 @@
       const since = rangeStartIso(range);
       if (since) {
         params.set("ts", `gte.${since}`);
-        params.set("order", "ts.asc");
-      } else {
-        params.set("order", "ts.desc");
       }
 
-      params.set("limit", String(range.limit || 300));
+      // 長期レンジでは古い順(ts.asc)で取得すると、Supabase側の返却上限により
+      // 最新データまで届かない場合があるため、必ず新しい順でページング取得する。
+      params.set("order", "ts.desc");
+      params.set("limit", String(limit));
+      params.set("offset", String(offset));
 
       return `${base}/rest/v1/${table}?${params.toString()}`;
     }
 
     async function fetchRows() {
-      const res = await fetch(supabaseUrl(), {
-        headers: {
-          apikey: cfg.SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${cfg.SUPABASE_ANON_KEY}`
-        }
-      });
+      const range = getSelectedRange();
+      const targetLimit = range.limit || 300;
 
-      if (!res.ok) {
-        const body = await res.text();
-        throw new Error(`Supabase取得エラー: HTTP ${res.status}\n${body}`);
+      // Supabase/PostgREST側の1回あたり返却上限を考慮し、1000件ずつ分割取得する。
+      const pageSize = Math.min(1000, targetLimit);
+      let offset = 0;
+      let allRows = [];
+
+      while (allRows.length < targetLimit) {
+        const currentLimit = Math.min(pageSize, targetLimit - allRows.length);
+
+        const res = await fetch(supabaseUrl(currentLimit, offset), {
+          headers: {
+            apikey: cfg.SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${cfg.SUPABASE_ANON_KEY}`
+          }
+        });
+
+        if (!res.ok) {
+          const body = await res.text();
+          throw new Error(`Supabase取得エラー: HTTP ${res.status}\n${body}`);
+        }
+
+        const rows = await res.json();
+        allRows = allRows.concat(rows);
+
+        if (rows.length < currentLimit) {
+          break;
+        }
+
+        offset += currentLimit;
       }
 
-      return await res.json();
+      // Chart.jsには古い→新しい順で渡す。
+      allRows.sort((a, b) => new Date(a.ts) - new Date(b.ts));
+      return allRows;
     }
 
     function latestByTank(rows) {
       const latest = {};
+
+      // fetchRows() は Chart.js 用に古い→新しい順へ並べ替えている。
+      // そのため、同じ tank_id が来たら上書きし、最後に残った行を最新値として扱う。
       for (const row of rows) {
-        if (!latest[row.tank_id]) latest[row.tank_id] = row;
+        latest[row.tank_id] = row;
       }
+
       return latest;
     }
 
