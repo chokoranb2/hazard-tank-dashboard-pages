@@ -737,13 +737,52 @@
       return allRows;
     }
 
+    function latestSupabaseUrl() {
+      const base = (cfg.SUPABASE_URL || "").replace(/\/$/, "");
+      const table = cfg.TABLE_NAME;
+      if (!base || !cfg.SUPABASE_ANON_KEY || !table) {
+        throw new Error("config.js の SUPABASE_URL / SUPABASE_ANON_KEY / TABLE_NAME を確認してください。");
+      }
+
+      const params = new URLSearchParams();
+      params.set("select", "*");
+      params.set("order", "ts.desc");
+      params.set("limit", "20");
+
+      return `${base}/rest/v1/${table}?${params.toString()}`;
+    }
+
+    async function fetchLatestRows() {
+      const res = await fetch(latestSupabaseUrl(), {
+        headers: {
+          apikey: cfg.SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${cfg.SUPABASE_ANON_KEY}`
+        }
+      });
+
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`Supabase最新値取得エラー: HTTP ${res.status}\n${body}`);
+      }
+
+      return await res.json();
+    }
+
     function latestByTank(rows) {
       const latest = {};
 
-      // fetchRows() は Chart.js 用に古い→新しい順へ並べ替えている。
-      // そのため、同じ tank_id が来たら上書きし、最後に残った行を最新値として扱う。
+      // rowsの並び順に依存せず、tsが最も新しい行をタンク別に採用する。
       for (const row of rows) {
-        latest[row.tank_id] = row;
+        if (!row?.tank_id || !row?.ts) continue;
+
+        const currentTs = new Date(row.ts).getTime();
+        const existingTs = latest[row.tank_id]?.ts
+          ? new Date(latest[row.tank_id].ts).getTime()
+          : -Infinity;
+
+        if (Number.isFinite(currentTs) && currentTs > existingTs) {
+          latest[row.tank_id] = row;
+        }
       }
 
       return latest;
@@ -971,12 +1010,14 @@
         document.getElementById("rangeNote").textContent =
           `${range.label}：${range.note} / 取得件数 ${rows.length}件${aggregateText}`;
 
-        const rowsForLatest = [...rows].sort((a, b) => new Date(b.ts) - new Date(a.ts));
-        const latest = latestByTank(rowsForLatest);
+        // カード表示は、選択中のグラフレンジに依存させず、Supabase上の最新レコードを別取得して表示する。
+        const latestSourceRows = await fetchLatestRows();
+        const latest = latestByTank(latestSourceRows);
         for (const tankId of TANK_ORDER) {
           renderTankCard(tankId, latest[tankId]);
         }
 
+        // グラフ表示は、選択レンジの履歴データを使用する。
         renderChart(rows);
 
         const latestRows = TANK_ORDER.map(id => latest[id]).filter(Boolean);
